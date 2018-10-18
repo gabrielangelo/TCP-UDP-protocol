@@ -1,5 +1,5 @@
 clean: 
 	@find . -name "*.pyc" -delete
 
-run_server:
+runserver:
 	@python server.py

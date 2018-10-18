@@ -2,10 +2,12 @@ import threading
 from time import sleep, time
 import socket
 import random 
+import pickle
 
 import packet
 from conf import *	
 from timer import Timer
+from packet import Packet
 
 
 class Protocol:
@@ -18,24 +20,31 @@ class Protocol:
 		self.window_size = window_size
 		self.with_lost_packets_simulation = True
 	
+	def check_checksum(self, pkt):
+		checksum_packet = pkt.checksum
+		cmp_checksum = self.check_checksum(pkt.data)
+		return True if checksum_packet == cmp_checksum else False
+	 
 	def set_window_size(self, num_packets):
 		return min(self.window_size, num_packets - self.base)
 
 	# Send a packet across the unreliable channel
 	# Packet may be lost
 	def send_packet(self, packet, addr):
-		seq_num, _ = packet.extract(packet)
+		# seq_num, _ = packet.extract(packet)
 		if self.with_lost_packets_simulation:
 			if random.randint(0, DROP_PROB) > 0:
-				print('packet %d dont lost in simulation' % seq_num)
+				print('packet %d dont lost in simulation' % packet.seq_num)
+				packet = pickle.dumps(packet)
 				self.socket.sendto(packet, addr)
 		else:
-			print('packet %d lost in simulation', seq_num)
+			print('packet %d lost in simulation', packet.seq_num)
 		return
 	
 	# Receive a packet from the unreliable channel
 	def recv_packet(self):
-		packet, addr = self.socket.recvfrom(1024)
+		data, addr = self.socket.recvfrom(1024)
+		packet = pickle.loads(data)
 		return packet, addr
 	
 	def send_file(self, filename):
@@ -52,11 +61,13 @@ class Protocol:
 			data = _file.read(PACKET_SIZE)
 			if not data:
 				break
-			self.packets_buffer.append(packet.make(seq_num, data))
+			packet = Packet.make(seq_num, data)
+			self.packets_buffer.append(packet)#packet.make(seq_num, data))
 			seq_num += 1
-
+		# set last packet like final packet
+		self.packets_buffer[-1].end = True
 		num_packets = len(self.packets_buffer)
-		print('I gots', num_packets)
+		# print('I gots', num_packets)
 		next_to_send = 0
 		window_size = self.set_window_size(num_packets)
 
@@ -101,13 +112,13 @@ class Protocol:
 		_file.close()
 		# Receive packets from the sender
 	def receive_worker_client(self):
-
 		while True:
 			pkt, _ = self.recv_packet();
-			ack, _ = packet.extract(pkt);
+			packet_received = pickle.loads(pkt)
+			ack, _ = packet_received.ack #packet.extract(pkt);
 
 			# If we get an ACK for the first in-flight packet
-			print('Got ACK', ack)
+			print('Got ACK', ack) 
 			if (ack >= self.base):
 				self.mutex.acquire()
 				self.base = ack + 1
@@ -124,7 +135,7 @@ class Protocol:
 	def receive_worker_server(self):
 		from io import StringIO
 		import datetime
-
+		end_stream_transfer = False
 		stream = StringIO()
 		expected_num = 0
 		while True:
@@ -132,35 +143,39 @@ class Protocol:
 			pkt, addr = self.recv_packet()
 			if not pkt:
 				break
-			seq_num, data = packet.extract(pkt)
-			print('Got packet', seq_num)
-			
-			# Send back an ACK
-			if seq_num == expected_num:
-				print('Got expected packet')
-				print('Sending ACK', expected_num)
-				pkt = packet.make(expected_num)
-				self.send_packet(pkt,  addr)
-				expected_num += 1
-				stream.write(data)
-				stream.write('\n')
-			else:
-				print('Sending ACK', expected_num - 1)
-				pkt = packet.make(expected_num - 1)
-				self.send_packet(pkt, addr)
-		stream.close()
-		# Open the file for writing
-		date_file_name = datetime.datetime.now().strftime("%Y-%m-%d  %I:%M:%S")
-		filename = 'data-receive-from %s in ' % addr[0]  +  date_file_name
-		try:
-			_file = open(filename, 'wb')
-			data = stream.getvalue()
-			_file.write(data)
-			_file.close()
-		except IOError:
-			print('Unable to open', filename)
-			return
-
+			while not end_stream_transfer:
+				packet_received = pickle.loads(pkt)
+				seq_num, data = packet_received.seq_num, packet_received.data
+				
+				print('Got packet', seq_num)
+				
+				# Send back an ACK
+				if seq_num == expected_num:
+					print('Got expected packet')
+					print('Sending ACK', expected_num)
+					packet = Packet.make(ack=expected_num)#packet.make(expected_num)
+					self.send_packet(packet, addr)
+					expected_num += 1
+					stream.write(data + '\n')
+					if packet_received.end:
+						end_stream_transfer = True
+				else:
+					print('Sending ACK', expected_num - 1)
+					packet = Packet.make(ack=expected_num - 1)
+					self.send_packet(pkt, addr)
+			stream.close()
+			# Open the file for writing
+			date_file_name = datetime.datetime.now().strftime("%Y-%m-%d  %I:%M:%S")
+			filename = 'data-receive-from %s in ' % addr[0]  +  date_file_name
+			try:
+				_file = open(filename, 'wb')
+				data = stream.getvalue()
+				_file.write(data)
+				_file.close()
+			except IOError:
+				print('Unable to open', filename)
+				return
+		
 		# Send empty packet as sentinel
 		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
 	
