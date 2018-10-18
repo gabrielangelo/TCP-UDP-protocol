@@ -9,21 +9,28 @@ from timer import Timer
 
 
 class Protocol:
-	def __init__(self):
+	def __init__(self, window_size=4):
 		self.packets_buffer = []
 		self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 		self.mutex = threading.Lock()
 		self.send_timer = Timer(TIMEOUT_INTERVAL)
 		self.base = 0
-
+		self.window_size = window_size
+		self.with_lost_packets_simulation = True
+	
 	def set_window_size(self, num_packets):
-		return min(WINDOW_SIZE, num_packets - self.base)
+		return min(self.window_size, num_packets - self.base)
 
 	# Send a packet across the unreliable channel
 	# Packet may be lost
 	def send_packet(self, packet, addr):
-		if random.randint(0, DROP_PROB) > 0:
-			self.socket.sendto(packet, addr)
+		seq_num, _ = packet.extract(packet)
+		if self.with_lost_packets_simulation:
+			if random.randint(0, DROP_PROB) > 0:
+				print('packet %d dont lost in simulation' % seq_num)
+				self.socket.sendto(packet, addr)
+		else:
+			print('packet %d lost in simulation', seq_num)
 		return
 	
 	# Receive a packet from the unreliable channel
@@ -84,10 +91,8 @@ class Protocol:
 			else:
 				print('Shifting window')
 				window_size = self.set_window_size(num_packets)
-				print('saiu do shifting')
 			self.mutex.release()
 		
-		print('saiu do while')
 		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
 		_file.close()
 		# Receive packets from the sender
