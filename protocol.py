@@ -1,5 +1,5 @@
 import threading
-from time import sleep 
+from time import sleep, time
 import socket
 import random 
 
@@ -39,6 +39,7 @@ class Protocol:
 		return packet, addr
 	
 	def send_file(self, filename):
+		start = time()
 		try:
 		    _file = open(filename, 'rb')
 		except IOError:
@@ -86,7 +87,7 @@ class Protocol:
 			if self.send_timer.timeout():
 				# Looks like we timed out
 				print('Timeout')
-				self.send_timer.stop();
+				self.send_timer.stop()
 				next_to_send = self.base
 			else:
 				print('Shifting window')
@@ -94,6 +95,9 @@ class Protocol:
 			self.mutex.release()
 		
 		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
+		end = time()
+		time_to_send_all = end - start
+		print('time to send all packets: %.2f' % time_to_send_all)
 		_file.close()
 		# Receive packets from the sender
 	def receive_worker_client(self):
