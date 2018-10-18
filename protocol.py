@@ -97,7 +97,7 @@ class Protocol:
 		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
 		end = time()
 		time_to_send_all = end - start
-		print('time to send all packets: %.2f' % time_to_send_all)
+		print('time to send all packets(RTT): %.2f' % time_to_send_all)
 		_file.close()
 		# Receive packets from the sender
 	def receive_worker_client(self):
@@ -115,20 +115,17 @@ class Protocol:
 				self.send_timer.stop()
 				self.mutex.release()
 	
+	# optional function to assigment random name to file
 	def __generate_filename(self):
 		import string
 		return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in 
 		range(SIZE_RANDOM_FILENAME))
 
 	def receive_worker_server(self):
-		# Open the file for writing
-		filename = self.__generate_filename()
-		try:
-			_file = open(filename, 'wb')
-		except IOError:
-			print('Unable to open', filename)
-			return
-		
+		from io import StringIO
+		import datetime
+
+		stream = StringIO()
 		expected_num = 0
 		while True:
 			# Get the next packet from the sender
@@ -145,13 +142,24 @@ class Protocol:
 				pkt = packet.make(expected_num)
 				self.send_packet(pkt,  addr)
 				expected_num += 1
-				_file.write(data)
+				stream.write(data)
+				stream.write('\n')
 			else:
 				print('Sending ACK', expected_num - 1)
 				pkt = packet.make(expected_num - 1)
 				self.send_packet(pkt, addr)
-
-		_file.close()
+		stream.close()
+		# Open the file for writing
+		date_file_name = datetime.datetime.now().strftime("%Y-%m-%d  %I:%M:%S")
+		filename = 'data-receive-from %s in ' % addr[0]  +  date_file_name
+		try:
+			_file = open(filename, 'wb')
+			data = stream.getvalue()
+			_file.write(data)
+			_file.close()
+		except IOError:
+			print('Unable to open', filename)
+			return
 
 		# Send empty packet as sentinel
 		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
