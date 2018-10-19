@@ -22,7 +22,7 @@ class Protocol:
 	
 	def check_checksum(self, pkt):
 		checksum_packet = pkt.checksum
-		cmp_checksum = self.check_checksum(pkt.data)
+		cmp_checksum = Packet.checksum(pkt.data)
 		return True if checksum_packet == cmp_checksum else False
 	 
 	def set_window_size(self, num_packets):
@@ -31,16 +31,21 @@ class Protocol:
 	# Send a packet across the unreliable channel
 	# Packet may be lost
 	def send_packet(self, packet, addr):
-		# seq_num, _ = packet.extract(packet)
 		if self.with_lost_packets_simulation:
 			if random.randint(0, DROP_PROB) > 0:
-				print('packet %d dont lost in simulation' % packet.seq_num)
-				packet = pickle.dumps(packet)
-				self.socket.sendto(packet, addr)
+				if packet.ack:
+					print('ack: %d' % packet.ack)
+				self.socket.sendto(pickle.dumps(packet), addr)
+			else:
+				if packet.ack:
+					print('packet %d lost in simulation' % packet.ack)
+				elif packet.seq_num:
+					print('packet %d lost in simulation' % packet.seq_num)
+				elif packet.is_empty:
+					print('empty pack lost in simulation')
 		else:
-			print('packet %d lost in simulation', packet.seq_num)
-		return
-	
+			self.socket.sendto(pickle.dumps(packet), addr)
+			
 	# Receive a packet from the unreliable channel
 	def recv_packet(self):
 		data, addr = self.socket.recvfrom(1024)
@@ -62,12 +67,13 @@ class Protocol:
 			if not data:
 				break
 			packet = Packet.make(seq_num, data)
+			print('packet seqnum ->', packet.seq_num)
 			self.packets_buffer.append(packet)#packet.make(seq_num, data))
 			seq_num += 1
 		# set last packet like final packet
 		self.packets_buffer[-1].end = True
 		num_packets = len(self.packets_buffer)
-		# print('I gots', num_packets)
+		print('I gots', num_packets)
 		next_to_send = 0
 		window_size = self.set_window_size(num_packets)
 
@@ -91,7 +97,7 @@ class Protocol:
 			# Wait until a timer goes off or we get an ACK
 			while self.send_timer.running() and not self.send_timer.timeout():
 				self.mutex.release()
-				print('Sleeping')
+				# print('Sleeping')	
 				sleep(SLEEP_INTERVAL)
 				self.mutex.acquire()
 
@@ -105,21 +111,25 @@ class Protocol:
 				window_size = self.set_window_size(num_packets)
 			self.mutex.release()
 		
-		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
+		self.send_packet(packet.make(), RECEIVER_ADDR)
 		end = time()
 		time_to_send_all = end - start
-		print('time to send all packets(RTT): %.2f' % time_to_send_all)
+		print('time to send all packets(RTT): %.2f ms' % time_to_send_all)
 		_file.close()
+		exit()
 		# Receive packets from the sender
+	
 	def receive_worker_client(self):
+		print('receiver client')
 		while True:
-			pkt, _ = self.recv_packet();
-			packet_received = pickle.loads(pkt)
-			ack, _ = packet_received.ack #packet.extract(pkt);
+			pkt, _ = self.recv_packet()
+			packet_received = pkt
+			ack = packet_received.ack #packet.extract(pkt);
+			size_buffer = len(self.packets_buffer)
 
 			# If we get an ACK for the first in-flight packet
 			print('Got ACK', ack) 
-			if (ack >= self.base):
+			if (ack is not None and ack >= self.base):
 				self.mutex.acquire()
 				self.base = ack + 1
 				print('Base updated', self.base)
@@ -127,24 +137,28 @@ class Protocol:
 				self.mutex.release()
 	
 	# optional function to assigment random name to file
-	def __generate_filename(self):
+	def _generate_filename(self):
 		import string
 		return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in 
 		range(SIZE_RANDOM_FILENAME))
 
 	def receive_worker_server(self):
-		from io import StringIO
+		from io import StringIO, BytesIO
 		import datetime
-		end_stream_transfer = False
-		stream = StringIO()
+		
+		stream = BytesIO()
 		expected_num = 0
+		data_to_put = None
+
 		while True:
 			# Get the next packet from the sender
-			pkt, addr = self.recv_packet()
-			if not pkt:
-				break
+			end_stream_transfer = False
 			while not end_stream_transfer:
-				packet_received = pickle.loads(pkt)
+				pkt, addr = self.recv_packet()
+				if not pkt:
+					break
+
+				packet_received = pkt
 				seq_num, data = packet_received.seq_num, packet_received.data
 				
 				print('Got packet', seq_num)
@@ -154,30 +168,34 @@ class Protocol:
 					print('Got expected packet')
 					print('Sending ACK', expected_num)
 					packet = Packet.make(ack=expected_num)#packet.make(expected_num)
+					print('paaaaacket ack',  packet.ack)					
+					
 					self.send_packet(packet, addr)
-					expected_num += 1
-					stream.write(data + '\n')
+					expected_num += 1	
+					stream.write(data)
+					data_to_put = stream.getvalue()
 					if packet_received.end:
 						end_stream_transfer = True
 				else:
 					print('Sending ACK', expected_num - 1)
 					packet = Packet.make(ack=expected_num - 1)
 					self.send_packet(pkt, addr)
-			stream.close()
+			
 			# Open the file for writing
 			date_file_name = datetime.datetime.now().strftime("%Y-%m-%d  %I:%M:%S")
 			filename = 'data-receive-from %s in ' % addr[0]  +  date_file_name
-			try:
-				_file = open(filename, 'wb')
-				data = stream.getvalue()
-				_file.write(data)
-				_file.close()
-			except IOError:
-				print('Unable to open', filename)
-				return
+			if end_stream_transfer:
+				try:
+					_file = open(filename, 'wb')
+					_file.write(data_to_put)
+					_file.close()
+					stream.close()
+				except IOError:
+					print('Unable to open', filename)
+					return
 		
 		# Send empty packet as sentinel
-		self.send_packet(packet.make_empty(), RECEIVER_ADDR)
+		self.send_packet(packet.make(), RECEIVER_ADDR)
 	
 	def run_server(self, client_address=None):
 		if client_address is None:
