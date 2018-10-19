@@ -19,10 +19,11 @@ class Protocol:
 		self.base = 0
 		self.window_size = window_size
 		self.with_lost_packets_simulation = True
+		self.with_checksum_error_simulation = True
 	
-	def check_checksum(self, pkt):
-		checksum_packet = pkt.checksum
-		cmp_checksum = Packet.checksum(pkt.data)
+	def checksum_packet_is_valid(self, pkt):
+		checksum_packet = pkt.checksum_data
+		cmp_checksum = pkt.checksum(pkt.data)
 		return True if checksum_packet == cmp_checksum else False
 	 
 	def set_window_size(self, num_packets):
@@ -32,9 +33,11 @@ class Protocol:
 	# Packet may be lost
 	def send_packet(self, packet, addr):
 		if self.with_lost_packets_simulation:
-			if random.randint(0, DROP_PROB) > 0:
-				if packet.ack:
-					print('ack: %d' % packet.ack)
+			if random.randint(0, DROP_PACKET_PROB) > 0:
+				if self.with_checksum_error_simulation:
+					if random.randint(0, DROP_PACKET_CHECKSUM) == 0:
+						packet.checksum_data+=1
+						print('packet send with incorret checksum')
 				self.socket.sendto(pickle.dumps(packet), addr)
 			else:
 				if packet.ack:
@@ -70,6 +73,7 @@ class Protocol:
 			print('packet seqnum ->', packet.seq_num)
 			self.packets_buffer.append(packet)#packet.make(seq_num, data))
 			seq_num += 1
+		
 		# set last packet like final packet
 		self.packets_buffer[-1].end = True
 		num_packets = len(self.packets_buffer)
@@ -82,7 +86,7 @@ class Protocol:
 		t.start()
 
 		while self.base < num_packets:
-			self.mutex.acquire()
+			self.mutex.acquire()	
 			# Send all the packets in the window
 			while next_to_send < self.base + window_size:
 				print('Sending packet', next_to_send)
@@ -116,9 +120,8 @@ class Protocol:
 		time_to_send_all = end - start
 		print('time to send all packets(RTT): %.2f ms' % time_to_send_all)
 		_file.close()
-		exit()
-		# Receive packets from the sender
 	
+	# Receive packets from the sender
 	def receive_worker_client(self):
 		print('receiver client')
 		while True:
@@ -154,22 +157,20 @@ class Protocol:
 			# Get the next packet from the sender
 			end_stream_transfer = False
 			while not end_stream_transfer:
-				pkt, addr = self.recv_packet()
-				if not pkt:
+				packet_received, addr = self.recv_packet()
+				if not packet_received:
 					break
 
-				packet_received = pkt
+				# packet_received = pkt
 				seq_num, data = packet_received.seq_num, packet_received.data
 				
 				print('Got packet', seq_num)
 				
 				# Send back an ACK
-				if seq_num == expected_num:
+				if seq_num == expected_num and not self.checksum_packet_is_valid(packet_received):
 					print('Got expected packet')
 					print('Sending ACK', expected_num)
-					packet = Packet.make(ack=expected_num)#packet.make(expected_num)
-					print('paaaaacket ack',  packet.ack)					
-					
+					packet = Packet.make(ack=expected_num)
 					self.send_packet(packet, addr)
 					expected_num += 1	
 					stream.write(data)
@@ -177,9 +178,11 @@ class Protocol:
 					if packet_received.end:
 						end_stream_transfer = True
 				else:
-					print('Sending ACK', expected_num - 1)
+					if not self.checksum_packet_is_valid(packet_received):
+						print('checksum error in packet sequence %d' % packet_received.seq_num)
+					print('Sending NACK', expected_num - 1)
 					packet = Packet.make(ack=expected_num - 1)
-					self.send_packet(pkt, addr)
+					self.send_packet(packet_received, addr)
 			
 			# Open the file for writing
 			date_file_name = datetime.datetime.now().strftime("%Y-%m-%d  %I:%M:%S")
@@ -189,7 +192,10 @@ class Protocol:
 					_file = open(filename, 'wb')
 					_file.write(data_to_put)
 					_file.close()
-					stream.close()
+					stream = BytesIO()
+					expected_num = 0
+					data_to_put = None
+					end_stream_transfer = False
 				except IOError:
 					print('Unable to open', filename)
 					return
