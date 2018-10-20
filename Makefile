@@ -3,3 +3,6 @@ clean:
 
 runserver:
 	@python server.py
+
+sendfile: 
+	@python client.py $(file) 
