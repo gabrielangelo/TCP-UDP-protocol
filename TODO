@@ -1,0 +1,4 @@
+- implementar detecção de erros (Checksum) com simulações
+- tornar o servidor apto a responder requisições em seguida 
+- No cliente, ao terminar de enviar os dados, o script deve finalizar sua execução
+- customizar log stdout de cliente e servidor
