@@ -12,9 +12,9 @@ $ python server.py
 
 ## Client mode usage 
 ```
-$ python client.py <file_to_send> # Default address defined in conf.py
+$ python client.py <file_to_send> # to default address defined in conf.py
 ```
 or 
 ```
-$ python client.py <file_to_send> <ip_address> <port>
+$ python client.py <file_to_send> <ip_address> <port> # optional
 ```
